@@ -93,13 +93,90 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, doubl
           double r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
           int rIdx = (r + rMax) / rScale;
           //debemos usar atomic, pero que race condition hay si somos un thread por pixel? explique
-          atomicAdd (acc + (rIdx * degreeBins + tIdx), 1);
+          atomicAdd(&acc[rIdx * degreeBins + tIdx], 1);
         }
     }
 
   //TODO eventualmente cuando se tenga memoria compartida, copiar del local al global
   //utilizar operaciones atomicas para seguridad
   //faltara sincronizar los hilos del bloque en algunos lados
+
+}
+
+
+// Function to get points from the accumulator
+double calculateTransformedPoints(double value, char op, double angle) {
+  // Check the operator and return the value
+  if (op == '+') {
+    // if the operator is +, return the value + 1000 * angle
+    return value + 1000 * (angle);
+  }
+  else if (op == '-') {
+    // if the operator is -, return the value - 1000 * angle
+    return value - 1000 * (angle);
+  }
+  else {
+    return 0.0; //default value if operator is not valid
+  }
+}
+
+
+void draw_Detected_Lines(cv::Mat& color_image, int *h_hough, int w, int h, double rScale, double rMax, int threshold){
+  // Create a vector to store the detected lines by the Hough Transform
+  std::vector<std::pair<cv::Vec2f, int>> detected_lines;
+  // Iterate over the accumulator
+  for (int r = 0; r < rBins; r++) {
+    for (int t = 0; t < degreeBins; t++) {
+      int index = r * degreeBins + t;
+      int weight = h_hough[index];
+
+      // Check if the weight is greater than the threshold
+      if (weight > threshold) {
+        double rValue = (r * rScale) - rMax;
+        double tValue = t * radInc;
+        // Add the detected line to the vector
+        detected_lines.push_back(std::make_pair(cv::Vec2f(tValue, rValue), weight));
+      }
+    }
+  }
+
+  // Sort the lines by weight in descending order
+  std::sort(detected_lines.begin(), detected_lines.end(), [](const std::pair<cv::Vec2f, int>& a, const std::pair<cv::Vec2f, int>& b) {
+    return a.second > b.second;
+  });
+
+  // Draw the detected lines on the input image
+  for (int i = 0; i < detected_lines.size(); i++){
+    cv::Vec2f line = detected_lines[i].first;
+    double theta = line[0];
+    double rho = line[1];
+    // Get the sine and cosine values
+    double cosTheta = cos(theta);
+    double sinTheta = sin(theta);
+
+    // Get the x and y values
+    double x_origin = (w / 2) + (rho * cosTheta);
+    double y_origin = (h / 2) - (rho * sinTheta);
+    
+    double x1 = calculateTransformedPoints(x_origin, '+', sinTheta);
+    double x2 = calculateTransformedPoints(x_origin, '-', sinTheta);
+
+    double y1 = calculateTransformedPoints(y_origin, '+', cosTheta);
+    double y2 = calculateTransformedPoints(y_origin, '-', cosTheta);
+
+    // Round the values
+    int x_start = cvRound(x1);
+    int y_start = cvRound(y1);
+    int x_end = cvRound(x2);
+    int y_end = cvRound(y2);
+
+    // Draw the line on the image
+    cv::line(color_image, cv::Point(x_start, y_start), cv::Point(x_end, y_end), cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
+  }
+
+  // Display the image with the detected lines
+  cv::imwrite("src/output/output_global.png", color_image);
+  printf("SUCCES: Output image saved as 'output.png'\n");
 
 }
 
@@ -149,7 +226,7 @@ int main (int argc, char **argv)
   cudaMalloc ((void **) &d_Cos, sizeof(double) * degreeBins);
   cudaMalloc ((void **) &d_Sin, sizeof(double) * degreeBins);
 
-  // CPU calculation
+  // CPU calculation --------------------------------------------------------------
   // Record the CPU execution time
   auto cpu_start = std::chrono::high_resolution_clock::now();
   CPU_HoughTran(inImg.pixels, w, h, &cpuht);
@@ -169,6 +246,7 @@ int main (int argc, char **argv)
     rad += radInc;
   }
 
+  // GPU calculation --------------------------------------------------------------
   // pre-compute values for the radius
   double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;
   double rScale = 2 * rMax / rBins;
@@ -218,14 +296,14 @@ int main (int argc, char **argv)
   // get results from device
   cudaMemcpy (h_hough, d_hough, sizeof(int) * degreeBins * rBins, cudaMemcpyDeviceToHost);
 
-  // compare CPU and GPU results
+  // compare CPU and GPU results --------------------------------------------------------------
   printf ("Comparing CPU and GPU results...\n");
   int mismatches = 0;
   for (i = 0; i < degreeBins * rBins; i++)
   {
     if (cpuht[i] != h_hough[i]) 
     {
-      printf (" -> Calculation mismatch at %i - CPU: %i | GPU: %i\n", i, cpuht[i], h_hough[i]);
+      printf (" -> Calculation mismatch at index: %i - CPU: %i | GPU: %i\n", i, cpuht[i], h_hough[i]);
       mismatches++;
     }
   }
@@ -235,8 +313,9 @@ int main (int argc, char **argv)
     printf ("ERROR: %d mismatches found\n\n", mismatches);
 
 
-  // Image Generation
+  // Image Generation --------------------------------------------------------------
   printf("Generating output image...\n");
+
   // Initialize mean and standard deviation for thresholding
   double mean = 0, stddev = 0;
   int total_elements = degreeBins * rBins;
@@ -255,36 +334,18 @@ int main (int argc, char **argv)
   stddev = sqrt(stddev / total_elements);
 
   // Threshold value is set to 2 standard deviations above the mean
-  double threshold = mean + 3 * stddev;
-  // Line length to improve visualization
-  int line_length = 1000;
+  double threshold = mean + (2.5 * stddev);
   printf("Info -> Threshold value: %f\n", threshold);
   printf("Info -> Mean value: %f, Standard deviation: %f\n", mean, stddev);
   
-  // Convert PGMImage to OpenCV Mat for line drawing and saving
-  cv::Mat img(h, w, CV_8UC1, inImg.pixels); // Load PGM data into grayscale Mat
+  // Load the image into a cv::Mat object
+  cv::Mat img(h, w, CV_8UC1, inImg.pixels);// Load PGM data into grayscale Mat
+  // Convert grayscale image to BGR color image for red line drawing
   cv::Mat color_img;
   cv::cvtColor(img, color_img, cv::COLOR_GRAY2BGR);
-  
-  // Draw lines on the image
-  for (int rIdx = 0; rIdx < rBins; rIdx++) {
-      for (int tIdx = 0; tIdx < degreeBins; tIdx++) {
-          if (h_hough[rIdx * degreeBins + tIdx] > threshold) {
-              double theta = tIdx * radInc;
-              double r = (rIdx * rScale) - rMax;
-              double cosT = cos(theta), sinT = sin(theta);
-              cv::Point pt1, pt2;
-              pt1.x = cvRound(r * cosT + line_length * (-sinT));
-              pt1.y = cvRound(r * sinT + line_length * cosT);
-              pt2.x = cvRound(r * cosT - line_length * (-sinT));
-              pt2.y = cvRound(r * sinT - line_length * cosT);
-              cv::line(color_img, pt1, pt2, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
-          }
-      }
-  }
-  // Save the output image
-  cv::imwrite("src/output/global_output.png", color_img);
-  printf("SUCCES: Output image saved as 'output.png'\n");
+
+  // Draw the detected lines on the image
+  draw_Detected_Lines(color_img, h_hough, w, h, rScale, rMax, threshold);
 
   // free memory
   free(pcCos);

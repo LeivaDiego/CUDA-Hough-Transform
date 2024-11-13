@@ -6,6 +6,9 @@
 #include <string.h>
 #include "pgm.h"
 #include <chrono>
+#include <cstring>
+#include <cstdio>
+#include <cstdlib>
 
 // Constants
 const int degreeInc = 2;
@@ -84,7 +87,8 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, doubl
       for (int tIdx = 0; tIdx < degreeBins; tIdx++)
         {
           //TODO utilizar memoria constante para senos y cosenos
-          //float r = xCoord * cos(tIdx) + yCoord * sin(tIdx); //probar con esto para ver diferencia en tiempo
+          //float r = xCoord * cos(tIdx) + yCoord * sin(tIdx); //Linea probada y provoca un aumento de 2X del tiempo 
+          // - Ademas induce discrepancias en la comparacion de valores con CPU 8k+
           double r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
           int rIdx = (r + rMax) / rScale;
           //debemos usar atomic, pero que race condition hay si somos un thread por pixel? explique
@@ -101,17 +105,46 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, doubl
 //*****************************************************************
 int main (int argc, char **argv)
 {
+  // Check for proper usage and input file
+  if (argc != 2)
+  {
+    printf("ERROR -> Invalid number of arguments | Usage: %s <image.pgm>\n", argv[0]);
+    exit(1);
+  }
+
+  // Check for proper file format (PGM)
+  if (strstr (argv[1], ".pgm") == NULL)
+  {
+    printf ("ERROR -> Invalid file format. Please use a .pgm file\n");
+    exit(1);
+  }
+
+  // Check for file existence
+  FILE *file = fopen (argv[1], "r");
+  if (file == NULL)
+  {
+    printf ("ERROR -> Input File '%s' not found.\n", argv[1]);
+    exit(1);
+  }
+  fclose (file); // Close file after checking
+
+
+  // Variables
   int i;
 
+  // Load the PGM image after successful checks
   PGMImage inImg (argv[1]);
 
+  // Create the accummulator in the host
   int *cpuht;
   int w = inImg.x_dim;
   int h = inImg.y_dim;
 
+  // Allocate memory for the cosine and sine values
   double* d_Cos;
   double* d_Sin;
 
+  // Allocate memory for the cosine and sine values
   cudaMalloc ((void **) &d_Cos, sizeof(double) * degreeBins);
   cudaMalloc ((void **) &d_Sin, sizeof(double) * degreeBins);
 
@@ -127,6 +160,7 @@ int main (int argc, char **argv)
   double *pcCos = (double *) malloc (sizeof(double) * degreeBins);
   double *pcSin = (double *) malloc (sizeof(double) * degreeBins);
   double rad = 0;
+  // fill the arrays with the pre-computed values
   for (i = 0; i < degreeBins; i++)
   {
     pcCos[i] = cos (rad);
@@ -134,10 +168,12 @@ int main (int argc, char **argv)
     rad += radInc;
   }
 
+  // pre-compute values for the radius
   double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;
   double rScale = 2 * rMax / rBins;
 
   // TODO eventualmente volver memoria global
+  // copy the pre-computed values to the device
   cudaMemcpy(d_Cos, pcCos, sizeof(double) * degreeBins, cudaMemcpyHostToDevice);
   cudaMemcpy(d_Sin, pcSin, sizeof(double) * degreeBins, cudaMemcpyHostToDevice);
 
@@ -148,6 +184,7 @@ int main (int argc, char **argv)
   h_in = inImg.pixels; // h_in contiene los pixeles de la imagen
   h_hough = (int *) malloc (degreeBins * rBins * sizeof (int));
 
+  // allocate memory in the device
   cudaMalloc ((void **) &d_in, sizeof (unsigned char) * w * h);
   cudaMalloc ((void **) &d_hough, sizeof (int) * degreeBins * rBins);
   cudaMemcpy (d_in, h_in, sizeof (unsigned char) * w * h, cudaMemcpyHostToDevice);

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <opencv2/opencv.hpp>
 
 // Constants
 const int degreeInc = 2;
@@ -199,8 +200,8 @@ int main (int argc, char **argv)
   //1 thread por pixel
   
   // Record the Kernel execution time
-  cudaEventRecord (start);
   int blockNum = ceil (w * h / 256);
+  cudaEventRecord (start);
   GPU_HoughTran <<< blockNum, 256 >>> (d_in, w, h, d_hough, rMax, rScale, d_Cos, d_Sin);
   cudaEventRecord (stop);
 
@@ -229,9 +230,61 @@ int main (int argc, char **argv)
     }
   }
   if (mismatches == 0)
-    printf ("SUCCESS: No mismatches found\n");
+    printf ("SUCCESS: No mismatches found\n\n");
   else
-    printf ("ERROR: %d mismatches found\n", mismatches);
+    printf ("ERROR: %d mismatches found\n\n", mismatches);
+
+
+  // Image Generation
+  printf("Generating output image...\n");
+  // Initialize mean and standard deviation for thresholding
+  double mean = 0, stddev = 0;
+  int total_elements = degreeBins * rBins;
+  
+  // Calculate the mean and standard deviation for thresholding
+  for (int i = 0; i < total_elements; i++) 
+  {
+    mean += h_hough[i];
+  }
+  mean /= total_elements;
+
+  for (int i = 0; i < total_elements; i++) 
+  {
+    stddev += pow(h_hough[i] - mean, 2);
+  }
+  stddev = sqrt(stddev / total_elements);
+
+  // Threshold value is set to 2 standard deviations above the mean
+  double threshold = mean + 3 * stddev;
+  // Line length to improve visualization
+  int line_length = 1000;
+  printf("Info -> Threshold value: %f\n", threshold);
+  printf("Info -> Mean value: %f, Standard deviation: %f\n", mean, stddev);
+  
+  // Convert PGMImage to OpenCV Mat for line drawing and saving
+  cv::Mat img(h, w, CV_8UC1, inImg.pixels); // Load PGM data into grayscale Mat
+  cv::Mat color_img;
+  cv::cvtColor(img, color_img, cv::COLOR_GRAY2BGR);
+  
+  // Draw lines on the image
+  for (int rIdx = 0; rIdx < rBins; rIdx++) {
+      for (int tIdx = 0; tIdx < degreeBins; tIdx++) {
+          if (h_hough[rIdx * degreeBins + tIdx] > threshold) {
+              double theta = tIdx * radInc;
+              double r = (rIdx * rScale) - rMax;
+              double cosT = cos(theta), sinT = sin(theta);
+              cv::Point pt1, pt2;
+              pt1.x = cvRound(r * cosT + line_length * (-sinT));
+              pt1.y = cvRound(r * sinT + line_length * cosT);
+              pt2.x = cvRound(r * cosT - line_length * (-sinT));
+              pt2.y = cvRound(r * sinT - line_length * cosT);
+              cv::line(color_img, pt1, pt2, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
+          }
+      }
+  }
+  // Save the output image
+  cv::imwrite("output.png", color_img);
+  printf("SUCCES: Output image saved as 'output.png'\n");
 
   // free memory
   free(pcCos);

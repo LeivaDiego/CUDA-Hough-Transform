@@ -13,7 +13,7 @@
 #include <math.h>
 #include <cuda.h>
 #include <string.h>
-#include "pgm.h"
+#include "common/pgm.h"
 
 const int degreeInc = 2;
 const int degreeBins = 180 / degreeInc;

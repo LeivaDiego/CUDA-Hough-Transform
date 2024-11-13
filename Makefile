@@ -8,18 +8,24 @@ OPENCV_LIBS = `pkg-config --cflags --libs opencv4`
 # Warnings to suppress
 SUPPRESS_WARNINGS = -diag-suppress=611
 
-# Linker flags
-all: pgm.o	houghBase houghGlobal
+# Directory paths
+SRC_DIR = src
+INPUT_DIR = $(SRC_DIR)/input
+OUTPUT_DIR = $(SRC_DIR)/output
+COMMON_DIR = $(SRC_DIR)/common
+EXEC_DIR = $(SRC_DIR)/executables
 
+# Executables
+all: pgm.o houghBase houghGlobal
 
-# Compiling the code for the base version
-houghBase:	houghBase.cu pgm.o
-	nvcc houghBase.cu pgm.o -o houghBase
+# Compiling the base version
+houghBase: $(SRC_DIR)/houghBase.cu $(COMMON_DIR)/pgm.o
+	nvcc $(SRC_DIR)/houghBase.cu $(COMMON_DIR)/pgm.o -o $(EXEC_DIR)/houghBase
 
-# Compiling the code for the global memory version with the pgm.o file
-houghGlobal:	hough_global.cu pgm.o
-	nvcc $(SUPPRESS_WARNINGS) hough_global.cu pgm.o -o houghGlobal -I$(OPENCV_INCLUDE_PATH) -L$(OPENCV_LIB_PATH) $(OPENCV_LIBS)
+# Compiling the global memory version with OpenCV flags
+houghGlobal: $(SRC_DIR)/hough_global.cu $(COMMON_DIR)/pgm.o
+	nvcc $(SUPPRESS_WARNINGS) $(SRC_DIR)/hough_global.cu $(COMMON_DIR)/pgm.o -o $(EXEC_DIR)/houghGlobal -I$(OPENCV_INCLUDE_PATH) -L$(OPENCV_LIB_PATH) $(OPENCV_LIBS)
 
-# Compiling the code for the pgm file handling
-pgm.o:	pgm.cpp
-	g++ -c pgm.cpp -o ./pgm.o
+# Compiling the pgm file handling
+pgm.o: $(COMMON_DIR)/pgm.cpp
+	g++ -c $(COMMON_DIR)/pgm.cpp -o $(COMMON_DIR)/pgm.o

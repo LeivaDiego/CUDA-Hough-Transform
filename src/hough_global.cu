@@ -4,7 +4,7 @@
 #include <math.h>
 #include <cuda.h>
 #include <string.h>
-#include "pgm.h"
+#include "common/pgm.h"
 #include <chrono>
 #include <cstring>
 #include <cstdio>
@@ -283,7 +283,7 @@ int main (int argc, char **argv)
       }
   }
   // Save the output image
-  cv::imwrite("output.png", color_img);
+  cv::imwrite("src/output/global_output.png", color_img);
   printf("SUCCES: Output image saved as 'output.png'\n");
 
   // free memory

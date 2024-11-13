@@ -11,18 +11,18 @@
 const int degreeInc = 2;
 const int degreeBins = 180 / degreeInc;
 const int rBins = 100;
-const float radInc = degreeInc * M_PI / 180;
+const double radInc = degreeInc * M_PI / 180;
 
 //*****************************************************************
 // The CPU function returns a pointer to the accummulator
 void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
 {
-  float rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;  //(w^2 + h^2)/2, radio max equivalente a centro -> esquina
+  double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;  //(w^2 + h^2)/2, radio max equivalente a centro -> esquina
   *acc = new int[rBins * degreeBins];            //el acumulador, conteo depixeles encontrados, 90*180/degInc = 9000
   memset (*acc, 0, sizeof (int) * rBins * degreeBins); //init en ceros
   int xCent = w / 2;
   int yCent = h / 2;
-  float rScale = 2 * rMax / rBins;
+  double rScale = 2 * rMax / rBins;
 
   for (int i = 0; i < w; i++) //por cada pixel
     for (int j = 0; j < h; j++) //...
@@ -32,10 +32,10 @@ void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
           {
             int xCoord = i - xCent;
             int yCoord = yCent - j;  // y-coord has to be reversed
-            float theta = 0;         // actual angle
+            double theta = 0;         // actual angle
             for (int tIdx = 0; tIdx < degreeBins; tIdx++) //add 1 to all lines in that pixel
               {
-                float r = xCoord * cos(theta) + yCoord * sin(theta);
+                double r = xCoord * cos(theta) + yCoord * sin(theta);
                 int rIdx = (r + rMax) / rScale;
                 (*acc)[rIdx * degreeBins + tIdx]++; //+1 para este radio r y este theta
                 theta += radInc;
@@ -64,7 +64,7 @@ void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
 
 // GPU kernel. One thread per image pixel is spawned.
 // The accummulator memory needs to be allocated by the host in global memory
-__global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, float rMax, float rScale, float *d_Cos, float *d_Sin)
+__global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, double rMax, double rScale, double *d_Cos, double *d_Sin)
 {
   // Calculate the global thread ID
   int gloID = blockIdx.x * blockDim.x + threadIdx.x;
@@ -85,7 +85,7 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, float
         {
           //TODO utilizar memoria constante para senos y cosenos
           //float r = xCoord * cos(tIdx) + yCoord * sin(tIdx); //probar con esto para ver diferencia en tiempo
-          float r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
+          double r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
           int rIdx = (r + rMax) / rScale;
           //debemos usar atomic, pero que race condition hay si somos un thread por pixel? explique
           atomicAdd (acc + (rIdx * degreeBins + tIdx), 1);
@@ -109,11 +109,11 @@ int main (int argc, char **argv)
   int w = inImg.x_dim;
   int h = inImg.y_dim;
 
-  float* d_Cos;
-  float* d_Sin;
+  double* d_Cos;
+  double* d_Sin;
 
-  cudaMalloc ((void **) &d_Cos, sizeof (float) * degreeBins);
-  cudaMalloc ((void **) &d_Sin, sizeof (float) * degreeBins);
+  cudaMalloc ((void **) &d_Cos, sizeof(double) * degreeBins);
+  cudaMalloc ((void **) &d_Sin, sizeof(double) * degreeBins);
 
   // CPU calculation
   // Record the CPU execution time
@@ -124,9 +124,9 @@ int main (int argc, char **argv)
   printf("CPU Execution Time: %f ms\n", cpu_elapsed.count());
 
   // pre-compute values to be stored
-  float *pcCos = (float *) malloc (sizeof (float) * degreeBins);
-  float *pcSin = (float *) malloc (sizeof (float) * degreeBins);
-  float rad = 0;
+  double *pcCos = (double *) malloc (sizeof(double) * degreeBins);
+  double *pcSin = (double *) malloc (sizeof(double) * degreeBins);
+  double rad = 0;
   for (i = 0; i < degreeBins; i++)
   {
     pcCos[i] = cos (rad);
@@ -134,12 +134,12 @@ int main (int argc, char **argv)
     rad += radInc;
   }
 
-  float rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;
-  float rScale = 2 * rMax / rBins;
+  double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;
+  double rScale = 2 * rMax / rBins;
 
   // TODO eventualmente volver memoria global
-  cudaMemcpy(d_Cos, pcCos, sizeof(float) * degreeBins, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_Sin, pcSin, sizeof(float) * degreeBins, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_Cos, pcCos, sizeof(double) * degreeBins, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_Sin, pcSin, sizeof(double) * degreeBins, cudaMemcpyHostToDevice);
 
   // setup and copy data from host to device
   unsigned char *d_in, *h_in;
@@ -178,10 +178,10 @@ int main (int argc, char **argv)
   cudaEventDestroy (stop);
 
   // get results from device
-  cudaMemcpy (h_hough, d_hough, sizeof (int) * degreeBins * rBins, cudaMemcpyDeviceToHost);
+  cudaMemcpy (h_hough, d_hough, sizeof(int) * degreeBins * rBins, cudaMemcpyDeviceToHost);
 
   // compare CPU and GPU results
-  printf ("Comparing CPU and GPU results\n");
+  printf ("Comparing CPU and GPU results...\n");
   int mismatches = 0;
   for (i = 0; i < degreeBins * rBins; i++)
   {

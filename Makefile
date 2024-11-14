@@ -16,7 +16,7 @@ COMMON_DIR = $(SRC_DIR)/common
 EXEC_DIR = $(SRC_DIR)/executables
 
 # Executables
-all: pgm.o houghBase houghGlobal houghConstant
+all: pgm.o houghBase houghGlobal houghConstant houghShared
 
 # Compiling the base version
 houghBase: $(SRC_DIR)/houghBase.cu $(COMMON_DIR)/pgm.o
@@ -29,6 +29,10 @@ houghGlobal: $(SRC_DIR)/hough_global.cu $(COMMON_DIR)/pgm.o
 # Compiling the constant memory version with OpenCV flags
 houghConstant: $(SRC_DIR)/hough_constant.cu $(COMMON_DIR)/pgm.o
 	nvcc $(SUPPRESS_WARNINGS) $(SRC_DIR)/hough_constant.cu $(COMMON_DIR)/pgm.o -o $(EXEC_DIR)/houghConstant -I$(OPENCV_INCLUDE_PATH) -L$(OPENCV_LIB_PATH) $(OPENCV_LIBS)
+
+# Compiling the shared memory version with OpenCV flags
+houghShared: $(SRC_DIR)/hough_shared.cu $(COMMON_DIR)/pgm.o
+	nvcc $(SUPPRESS_WARNINGS) $(SRC_DIR)/hough_shared.cu $(COMMON_DIR)/pgm.o -o $(EXEC_DIR)/houghShared -I$(OPENCV_INCLUDE_PATH) -L$(OPENCV_LIB_PATH) $(OPENCV_LIBS)
 
 # Compiling the pgm file handling
 pgm.o: $(COMMON_DIR)/pgm.cpp

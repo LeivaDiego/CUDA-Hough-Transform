@@ -21,27 +21,36 @@ const double radInc = degreeInc * M_PI / 180;
 // The CPU function returns a pointer to the accummulator
 void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
 {
-  double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;  //(w^2 + h^2)/2, radio max equivalente a centro -> esquina
-  *acc = new int[rBins * degreeBins];            //el acumulador, conteo depixeles encontrados, 90*180/degInc = 9000
-  memset (*acc, 0, sizeof (int) * rBins * degreeBins); //init en ceros
+  double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;  // (w^2 + h^2)/2, max radius calculated from center to edge
+  *acc = new int[rBins * degreeBins]; // Count pixels where 90*180/degInc = 9000
+  memset (*acc, 0, sizeof (int) * rBins * degreeBins); //Initialize accumulator to 0
+  
+  // Calculate the center of the image
   int xCent = w / 2;
   int yCent = h / 2;
   double rScale = 2 * rMax / rBins;
 
-  for (int i = 0; i < w; i++) //por cada pixel
-    for (int j = 0; j < h; j++) //...
+  // Iterate over the pixels in the image
+  for (int i = 0; i < w; i++)
+    for (int j = 0; j < h; j++)
       {
+        // Calculate the index of the pixel
         int idx = j * w + i;
-        if (pic[idx] > 0) //si pasa thresh, entonces lo marca
+        // Check if the pixel is greater than 0
+        if (pic[idx] > 0)
           {
+            // Calculate the x and y coordinates of the pixel
             int xCoord = i - xCent;
             int yCoord = yCent - j;  // y-coord has to be reversed
             double theta = 0;         // actual angle
+
+            // Iterate over the degree bins
             for (int tIdx = 0; tIdx < degreeBins; tIdx++) //add 1 to all lines in that pixel
               {
+                // Calculate the radius
                 double r = xCoord * cos(theta) + yCoord * sin(theta);
                 int rIdx = (r + rMax) / rScale;
-                (*acc)[rIdx * degreeBins + tIdx]++; //+1 para este radio r y este theta
+                (*acc)[rIdx * degreeBins + tIdx]++; //+1 for this radius r and this theta
                 theta += radInc;
               }
           }
@@ -49,58 +58,38 @@ void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
 }
 
 //*****************************************************************
-// TODO usar memoria constante para la tabla de senos y cosenos
-// inicializarlo en main y pasarlo al device
-//__constant__ float d_Cos[degreeBins];
-//__constant__ float d_Sin[degreeBins];
-
-//*****************************************************************
-//TODO Kernel memoria compartida
-// __global__ void GPU_HoughTranShared(...)
-// {
-//   //TODO
-// }
-//TODO Kernel memoria Constante
-// __global__ void GPU_HoughTranConst(...)
-// {
-//   //TODO
-// }
-
 // GPU kernel. One thread per image pixel is spawned.
 // The accummulator memory needs to be allocated by the host in global memory
 __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, double rMax, double rScale, double *d_Cos, double *d_Sin)
 {
   // Calculate the global thread ID
   int gloID = blockIdx.x * blockDim.x + threadIdx.x;
+  
+  // Check if the global thread ID is greater than the width * height
   if (gloID >= w * h) return;      // in case of extra threads in block
 
+  // Calculate the center of the image
   int xCent = w / 2;
   int yCent = h / 2;
 
-  //TODO explicar bien bien esta parte. Dibujar un rectangulo a modo de imagen sirve para visualizarlo mejor
+  // Calculate the x and y coordinates of the pixel
   int xCoord = gloID % w - xCent;
   int yCoord = yCent - gloID / w;
 
-  //TODO eventualmente usar memoria compartida para el acumulador
-
+  // Check if the pixel is greater than 0
   if (pic[gloID] > 0)
     {
+      // Iterate over the degree bins
       for (int tIdx = 0; tIdx < degreeBins; tIdx++)
         {
-          //TODO utilizar memoria constante para senos y cosenos
           //float r = xCoord * cos(tIdx) + yCoord * sin(tIdx); //Linea probada y provoca un aumento de 2X del tiempo 
           // - Ademas induce discrepancias en la comparacion de valores con CPU 8k+
           double r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
           int rIdx = (r + rMax) / rScale;
-          //debemos usar atomic, pero que race condition hay si somos un thread por pixel? explique
+          // Use atomicAdd to prevent race conditions, and update the accumulator
           atomicAdd(&acc[rIdx * degreeBins + tIdx], 1);
         }
     }
-
-  //TODO eventualmente cuando se tenga memoria compartida, copiar del local al global
-  //utilizar operaciones atomicas para seguridad
-  //faltara sincronizar los hilos del bloque en algunos lados
-
 }
 
 
@@ -183,6 +172,7 @@ void draw_Detected_Lines(cv::Mat& color_image, int *h_hough, int w, int h, doubl
 //*****************************************************************
 int main (int argc, char **argv)
 {
+  // Initial Arguments --------------------------------------------------------------
   // Check for proper usage and input file
   if (argc != 2)
   {
@@ -207,7 +197,7 @@ int main (int argc, char **argv)
   fclose (file); // Close file after checking
 
 
-  // Variables
+  // Variables --------------------------------------------------------------
   int i;
 
   // Load the PGM image after successful checks
@@ -251,7 +241,6 @@ int main (int argc, char **argv)
   double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;
   double rScale = 2 * rMax / rBins;
 
-  // TODO eventualmente volver memoria global
   // copy the pre-computed values to the device
   cudaMemcpy(d_Cos, pcCos, sizeof(double) * degreeBins, cudaMemcpyHostToDevice);
   cudaMemcpy(d_Sin, pcSin, sizeof(double) * degreeBins, cudaMemcpyHostToDevice);
@@ -276,9 +265,9 @@ int main (int argc, char **argv)
 
   // execution configuration uses a 1-D grid of 1-D blocks, each made of 256 threads
   //1 thread por pixel
+  int blockNum = ceil (w * h / 256);
   
   // Record the Kernel execution time
-  int blockNum = ceil (w * h / 256);
   cudaEventRecord (start);
   GPU_HoughTran <<< blockNum, 256 >>> (d_in, w, h, d_hough, rMax, rScale, d_Cos, d_Sin);
   cudaEventRecord (stop);
@@ -347,7 +336,7 @@ int main (int argc, char **argv)
   // Draw the detected lines on the image
   draw_Detected_Lines(color_img, h_hough, w, h, rScale, rMax, threshold);
 
-  // free memory
+  // Free memory --------------------------------------------------------------
   free(pcCos);
   free(pcSin);
   free(h_hough);

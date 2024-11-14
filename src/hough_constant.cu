@@ -21,19 +21,25 @@ const double radInc = degreeInc * M_PI / 180;
 // The CPU function returns a pointer to the accummulator
 void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
 {
-  double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;  //(w^2 + h^2)/2, radio max equivalente a centro -> esquina
-  *acc = new int[rBins * degreeBins];            //el acumulador, conteo depixeles encontrados, 90*180/degInc = 9000
-  memset (*acc, 0, sizeof (int) * rBins * degreeBins); //init en ceros
+  double rMax = sqrt (1.0 * w * w + 1.0 * h * h) / 2;  // (w^2 + h^2)/2, max radius calculated from center to edge
+  *acc = new int[rBins * degreeBins]; // Count pixels where 90*180/degInc = 9000
+  memset (*acc, 0, sizeof (int) * rBins * degreeBins); //Initialize accumulator to 0
+  
+  // Calculate the center of the image
   int xCent = w / 2;
   int yCent = h / 2;
   double rScale = 2 * rMax / rBins;
 
-  for (int i = 0; i < w; i++) //por cada pixel
-    for (int j = 0; j < h; j++) //...
+  // Iterate over the pixels
+  for (int i = 0; i < w; i++)
+    for (int j = 0; j < h; j++)
       {
+        // Calculate the index of the pixel
         int idx = j * w + i;
-        if (pic[idx] > 0) //si pasa thresh, entonces lo marca
+        // Check if the pixel value is greater than 0
+        if (pic[idx] > 0)
           {
+            // Calculate the x and y coordinates of the pixel
             int xCoord = i - xCent;
             int yCoord = yCent - j;  // y-coord has to be reversed
             double theta = 0;         // actual angle
@@ -41,7 +47,7 @@ void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
               {
                 double r = xCoord * cos(theta) + yCoord * sin(theta);
                 int rIdx = (r + rMax) / rScale;
-                (*acc)[rIdx * degreeBins + tIdx]++; //+1 para este radio r y este theta
+                (*acc)[rIdx * degreeBins + tIdx]++; //+1 for this radius r and this theta
                 theta += radInc;
               }
           }
@@ -56,12 +62,6 @@ __constant__ double d_Sin[degreeBins];
 
 
 //*****************************************************************
-//TODO Kernel memoria compartida
-// __global__ void GPU_HoughTranShared(...)
-// {
-//   //TODO
-// }
-
 // GPU kernel. One thread per image pixel is spawned.
 // The accummulator memory needs to be allocated by the host in global memory
 // Now we are using constant memory for the cosine and sine values 
@@ -70,6 +70,7 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, doubl
 {
   // Calculate the global thread ID
   int gloID = blockIdx.x * blockDim.x + threadIdx.x;
+  // Check if the thread is out of bounds
   if (gloID >= w * h) return;      // in case of extra threads in block
 
   // Calculate the center of the image
@@ -89,18 +90,13 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, doubl
           // Use constant memory for the cosine and sine values
           double r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
           int rIdx = (r + rMax) / rScale;
-          // Use of atomicAdd to prevent any race conditions
+          // Use atomicAdd to prevent race conditions, and update the accumulator
           atomicAdd(&acc[rIdx * degreeBins + tIdx], 1);
         }
     }
-
-  //TODO eventualmente cuando se tenga memoria compartida, copiar del local al global
-  //utilizar operaciones atomicas para seguridad
-  //faltara sincronizar los hilos del bloque en algunos lados
-
 }
 
-
+// Image Drawing Functions --------------------------------------------------------------
 // Function to get points from the accumulator
 double calculateTransformedPoints(double value, char op, double angle) {
   // Check the operator and return the value
@@ -117,7 +113,7 @@ double calculateTransformedPoints(double value, char op, double angle) {
   }
 }
 
-
+// Function to draw the detected lines on the image
 void draw_Detected_Lines(cv::Mat& color_image, int *h_hough, int w, int h, double rScale, double rMax, int threshold){
   // Create a vector to store the detected lines by the Hough Transform
   std::vector<std::pair<cv::Vec2f, int>> detected_lines;
@@ -155,9 +151,9 @@ void draw_Detected_Lines(cv::Mat& color_image, int *h_hough, int w, int h, doubl
     double x_origin = (w / 2) + (rho * cosTheta);
     double y_origin = (h / 2) - (rho * sinTheta);
     
+    // Calculate the transformed points for starting and ending points
     double x1 = calculateTransformedPoints(x_origin, '+', sinTheta);
     double x2 = calculateTransformedPoints(x_origin, '-', sinTheta);
-
     double y1 = calculateTransformedPoints(y_origin, '+', cosTheta);
     double y2 = calculateTransformedPoints(y_origin, '-', cosTheta);
 
@@ -177,9 +173,10 @@ void draw_Detected_Lines(cv::Mat& color_image, int *h_hough, int w, int h, doubl
 
 }
 
-//*****************************************************************
+// Main Loop *****************************************************************
 int main (int argc, char **argv)
 {
+  // Initial Arguments --------------------------------------------------------------
   // Check for proper usage and input file
   if (argc != 2)
   {
@@ -203,8 +200,7 @@ int main (int argc, char **argv)
   }
   fclose (file); // Close file after checking
 
-
-  // Variables
+  // Variables --------------------------------------------------------------
   int i;
 
   // Load the PGM image after successful checks
@@ -241,7 +237,6 @@ int main (int argc, char **argv)
   }
 
   // GPU calculation --------------------------------------------------------------
- 
   // copy the pre-computed values to the device constant memory
   cudaMemcpyToSymbol(d_Cos, pcCos, sizeof(double) * degreeBins);
   cudaMemcpyToSymbol(d_Sin, pcSin, sizeof(double) * degreeBins);
